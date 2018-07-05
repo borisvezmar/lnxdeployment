@@ -1,0 +1,342 @@
+#!/bin/bash
+
+LOGFILE="/root/provision.log"
+
+echo "Starting the deploy in 3...2...1..."
+
+#
+##Check if == root
+#
+
+if [ $(id -u) -ne 0 ]; then
+	echo "Run this script as a Root user only" >&2
+	exit 1
+fi
+
+#
+##Public IP
+#
+
+IP=$(ip route get 8.8.8.8 | awk 'NR==1 {print $NF}')
+
+#
+#Check Error at any place and exit
+#
+
+checkerror() {
+
+RESULT=$1
+
+if [ $RESULT != 0 ];then
+echo "Errors occurred while installing, Check $LOGFILE"
+exit 127
+fi
+
+}
+
+#
+# Fetching pwgen through epel
+#
+
+#yum --nogpgcheck -q -y install epel-release 1 >> $LOGFILE
+#sleep 3s
+
+#checkerror $?
+
+#
+# Fetching required variables to proceed
+#
+
+echo "Let's gather all the data!"
+
+#
+# 192-bit pass to make sure there's a special character mysql needs to satisfy the policy requirements. Also to make it super-secure and such...
+#
+MYSQLROOTPASSWORD=`pwmake 192`
+
+checkerror $?
+
+
+WPDBNAME=
+while [[ $WPDBNAME = "" ]]; do
+   read -p "Enter Wordpress Database name: " WPDBNAME
+done
+
+checkerror $?
+
+
+WPUSER=
+while [[ $WPUSER = "" ]]; do
+   read -p "Enter Wordpress Mysql user : " WPUSER
+done
+
+checkerror $?
+
+
+WPPWD=`pwmake 128`
+
+checkerror $?
+
+WPDASHBOARDUSER=
+while [[ $WPDASHBOARDUSER = "" ]]; do
+   read -p "Enter Wordpress dashboard user : " WPDASHBOARDUSER
+done
+
+checkerror $?
+
+WPDASHBOARDPASS=`pwmake 128`
+
+checkerror $?
+
+
+while true; do
+   read -p "Enter email address for dashboard user: " WPDASHBOARDEMAIL
+   if [[ "$WPDASHBOARDEMAIL" =~ ^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,4}$ ]]; then
+          echo "Email address $WPDASHBOARDEMAIL is valid. We'll be using that."
+   else
+           echo "Email address $WPDASHBOARDEMAIL is invalid. Try that again please."
+   continue
+   fi
+   break
+done
+
+checkerror $?
+
+
+while true; do
+   read -p "Enter the domain name of the website: " WEBSITENAME
+   if [[ "$WEBSITENAME" =~ ^[A-Za-z0-9.-]+\.[A-Za-z]{2,4}$ ]]; then
+          echo "Domain name $WEBSITENAME is valid. We'll be using that."
+   else
+           echo "Domain name $WEBSITENAME is invalid. Try that again please."
+   continue
+   fi
+   break
+done
+
+checkerror $?
+
+WEBSITEUSER=
+while [[ $WEBSITEUSER = "" ]]; do
+   read -p "Enter the user under which the website will run: " WEBSITEUSER
+done
+
+checkerror $?
+
+PHPVERSION=
+while [[ $PHPVERSION = "" ]]; do
+   read -p "Enter the PHP version (php70, php71, php72): " PHPVERSION
+done
+
+checkerror $?
+
+#
+#Making the website user
+#
+
+echo "Making the user: $WEBSITEUSER..."
+
+useradd -s /bin/false -c "User to run $WEBSITENAME under" $WEBSITEUSER
+
+checkerror $?
+
+#
+#Updating repo information
+#
+
+echo "Updating repo information..."
+
+yum clean all 1>> $LOGFILE
+yum makecache 1>> $LOGFILE
+
+checkerror $?
+
+#
+#Installing necessary repos
+#
+
+echo "Installing repos..."
+
+yum --nogpgcheck -y install https://dev.mysql.com/get/mysql80-community-release-el7-1.noarch.rpm https://rpms.remirepo.net/enterprise/remi-release-7.rpm 1>> $LOGFILE
+
+checkerror $?
+
+#
+#Installing yum-utils and configuring Remi repo
+#
+
+echo "Installing yum-utils and making changes to Remi..."
+
+yum --nogpgcheck -q -y install yum-utils 1>> $LOGFILE
+yum-config-manager --enable remi-$PHPVERSION 1>> $LOGFILE
+yum-config-manager --disable mysql80-community 1>> $LOGFILE
+yum-config-manager --enable mysql57-community 1>> $LOGFILE
+
+checkerror $?
+
+#
+#Installing Apache, PHP nad MySQL, removing previous MySQL if there is one
+#
+
+echo "Installing Apache, $PHPVERSION and MySQL. Also removing previous MySQL if there is one..."
+
+systemctl stop mysqld.service && yum remove -y mysql-community-server && rm -rf /var/lib/mysql && rm -rf /var/log/mysqld.log && rm -rf /etc/my.cnf 1>> $LOGFILE
+yum --nogpgcheck -q -y install httpd24 httpd24-tools httpd24-manual httpd-itk mysql-community-server php php-mcrypt php-cli php-gd php-curl php-ldap php-zip php-fileinfo php-mysqlnd 1>> $LOGFILE
+
+checkerror $?
+
+
+#
+#Updating system and packages
+#
+
+echo "Updating system and packages..."
+
+yum -q -y update 1>> $LOGFILE
+
+checkerror $?
+
+
+#
+#Starting Apache and MySQL and enabling at boot time
+#
+
+echo "Starting Apache and MySQL and enabling at boot time..."
+
+systemctl start mysqld && systemctl enable mysqld && systemctl start httpd && systemctl enable httpd 1>> $LOGFILE
+
+checkerror $?
+
+
+#
+#Fetching MySQL temp root password and doing the secure installation
+#
+
+echo "Securing the fresh DB install and setting the secure root pass..."
+
+MYSQLTEMPPASSWORD="`grep 'temporary.*root@localhost' /var/log/mysqld.log | tail -n 1 | sed 's/.*root@localhost: //'`"
+
+systemctl stop mysqld.service 1>> $LOGFILE 
+rm -rf /var/lib/mysql/*logfile* 1>> $LOGFILE 
+systemctl start mysqld.service 1>> $LOGFILE 
+mysqladmin -u root --password="$MYSQLTEMPPASSWORD" password "$MYSQLROOTPASSWORD" 1>> $LOGFILE 
+mysql -u root -p"$MYSQLROOTPASSWORD" 1>> $LOGFILE <<-EOSQL
+    DELETE FROM mysql.user WHERE User='';
+    DROP DATABASE IF EXISTS test;
+    DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
+    DELETE FROM mysql.user where user != 'mysql.sys';
+    CREATE USER 'root'@'%' IDENTIFIED BY '${MYSQLROOTPASSWORD}';
+    GRANT ALL ON *.* TO 'root'@'%' WITH GRANT OPTION;
+    FLUSH PRIVILEGES;
+EOSQL
+
+systemctl status mysqld.service 1>> $LOGFILE 
+
+checkerror $?
+
+#
+#Making website config, folders, denying direct access to IP, configuring vhost/server block
+#
+
+echo "Making website config, folders, denying direct access to IP, configuring vhost/server block..."
+
+echo "IncludeOptional vhost.d/*.conf" >> /etc/httpd/conf/httpd.conf
+sed -i 's/#LoadModule/LoadModule/g' /etc/httpd/conf.modules.d/00-mpm-itk.conf
+mkdir /etc/httpd/vhost.d  >> $LOGFILE
+touch /etc/httpd/vhost.d/default.conf  >> $LOGFILE
+cat >> /etc/httpd/vhost.d/default.conf 1>> $LOGFILE <<EOF
+<VirtualHost *:80>
+    ServerName $IP
+    <Location />
+       Require all denied
+    </Location>
+</VirtualHost>
+EOF
+
+checkerror $?
+
+mkdir -p /var/log/httpd/$WEBSITENAME/  >> $LOGFILE
+mkdir -p /var/www/vhosts/$WEBSITENAME/public_html/ >> $LOGFILE
+chown -R $WEBSITEUSER:$WEBSITEUSER /var/www/vhosts/$WEBSITENAME >> $LOGFILE
+touch /etc/httpd/vhost.d/$WEBSITENAME.conf  >> $LOGFILE
+cat >> /etc/httpd/vhost.d/$WEBSITENAME.conf 1>> $LOGFILE <<EOF
+<VirtualHost *:80>
+    ServerName $WEBSITENAME
+    DocumentRoot /var/www/vhosts/$WEBSITENAME/public_html
+    ServerAlias $WEBSITENAME www.$WEBSITENAME
+    ErrorLog /var/log/httpd/$WEBSITENAME/error.log
+    CustomLog /var/log/httpd/$WEBSITENAME/access.log combined
+        <IfModule mpm_itk_module>
+                AssignUserId $WEBSITEUSER $WEBSITEUSER
+        </IfModule>
+
+        <Directory / >
+                Options Indexes FollowSymLinks Includes ExecCGI
+                AllowOverride All
+                Require all granted
+        </Directory>
+</VirtualHost>
+EOF
+
+checkerror $?
+
+#
+#Preparing DB for the new website
+#
+
+echo "Making DB, DB user and seting privileges..."
+
+mysql -u root -p"${MYSQLROOTPASSWORD}" 1>> $LOGFILE <<MYSQL_SCRIPT
+CREATE DATABASE $WPDBNAME DEFAULT CHARACTER SET utf8 COLLATE utf8_unicode_ci;
+GRANT ALL ON $WPDBNAME.* TO '$WPUSER'@'localhost' IDENTIFIED BY '$WPPWD';
+FLUSH PRIVILEGES;
+MYSQL_SCRIPT
+
+checkerror $?
+
+#
+#Downloading, configuring and installing Wordpress website via WP-CLI
+#
+
+echo "Downloading, configuring and installing Wordpress website via WP-CLI..."
+
+cd /root 1>> $LOGFILE
+curl -O https://raw.githubusercontent.com/wp-cli/builds/gh-pages/phar/wp-cli.phar 1>> $LOGFILE
+chmod +x wp-cli.phar 1>> $LOGFILE
+mv wp-cli.phar /usr/bin/wp 1>> $LOGFILE
+cd /var/www/vhosts/$WEBSITENAME/public_html 1>> $LOGFILE
+
+checkerror $?
+
+sudo -u $WEBSITEUSER wp core download >> $LOGFILE
+sudo -u $WEBSITEUSER wp config create --dbname=$WPDBNAME --dbuser=$WPUSER --dbpass=$WPPWD --skip-check >> $LOGFILE
+sudo -u $WEBSITEUSER wp core install --path="/var/www/vhosts/$WEBSITENAME/public_html/" --url="$WEBSITENAME" --title="Brand new $WEBSITENAME" --admin_user="$WPDASHBOARDUSER" --admin_password="$WPDASHBOARDPASS" --admin_email="$WPDASHBOARDEMAIL" >> $LOGFILE
+echo "define('FS_METHOD','direct');" >> /var/www/vhosts/$WEBSITENAME/public_html/wp-config.php
+apachectl restart
+
+checkerror $?
+
+#
+#Wrapping it up and reporting
+#
+
+echo "Installation has been successfully completed. Here's log and data. You'll need it!
+
+Log file is at $LOGFILE
+
+Login to http://$WEBSITENAME/wp-admin to complete the installation and make further configuration changes through the web interface
+
+The information you'll need are as follows:
+1) Wordpress Database Name:				$WPDBNAME
+2) Wordpress Database User:				$WPUSER
+3) Wordpress Database User Password:			$WPPWD
+4) Wordpress Dashboard User:				$WPDASHBOARDUSER
+5) Wordpress Dashboard pass:				$WPDASHBOARDPASS
+
+6) Your public facing IP v4 is:				$IP
+
+7) Your MySQL root pass is:				$MYSQLROOTPASSWORD
+
+DO NOT FORGET to put the IP into the hosts file in case you don't have a DNS zone just yet, or simply testing this out.
+Also, Kernel was likely updated, so reboot your server before it goes into the production environment!
+"
