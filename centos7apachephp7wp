@@ -35,15 +35,6 @@ fi
 }
 
 #
-# Fetching pwgen through epel
-#
-
-#yum --nogpgcheck -q -y install epel-release 1 >> $LOGFILE
-#sleep 3s
-
-#checkerror $?
-
-#
 # Fetching required variables to proceed
 #
 
@@ -52,10 +43,15 @@ echo "Let's gather all the data!"
 #
 # 192-bit pass to make sure there's a special character mysql needs to satisfy the policy requirements. Also to make it super-secure and such...
 #
-MYSQLROOTPASSWORD=`pwmake 192`
+while true; do
+   MYSQLROOTPASSWORD=`pwmake 64`@
+   if [[ "$MYSQLROOTPASSWORD" =~ (!?(\#|\'|\;|\$|\"|\,|\[|\]|\*|\?|\{|\}|\~|\%|\\|\<|\>|\||\^)) ]]; then
+        continue
+   fi
+   break
+done
 
 checkerror $?
-
 
 WPDBNAME=
 while [[ $WPDBNAME = "" ]]; do
@@ -64,14 +60,12 @@ done
 
 checkerror $?
 
-
 WPUSER=
 while [[ $WPUSER = "" ]]; do
    read -p "Enter Wordpress Mysql user : " WPUSER
 done
 
 checkerror $?
-
 
 WPPWD=`pwmake 128`
 
