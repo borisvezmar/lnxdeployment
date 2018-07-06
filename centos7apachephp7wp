@@ -44,7 +44,7 @@ echo "Let's gather all the data!"
 # 192-bit pass to make sure there's a special character mysql needs to satisfy the policy requirements. Also to make it super-secure and such...
 #
 while true; do
-   MYSQLROOTPASSWORD=`pwmake 64`@
+   MYSQLROOTPASSWORD=`pwmake 80`6@
    if [[ "$MYSQLROOTPASSWORD" =~ (!?(\#|\'|\;|\$|\"|\,|\[|\]|\*|\?|\{|\}|\~|\%|\\|\<|\>|\||\^)) ]]; then
         continue
    fi
@@ -67,7 +67,7 @@ done
 
 checkerror $?
 
-WPPWD=`pwmake 128`
+WPPWD=`pwmake 80`
 
 checkerror $?
 
@@ -78,7 +78,7 @@ done
 
 checkerror $?
 
-WPDASHBOARDPASS=`pwmake 128`
+WPDASHBOARDPASS=`pwmake 80`
 
 checkerror $?
 
@@ -197,7 +197,7 @@ checkerror $?
 
 echo "Starting Apache and MySQL and enabling at boot time..."
 
-systemctl start mysqld && systemctl enable mysqld && systemctl start httpd && systemctl enable httpd 1>> $LOGFILE
+systemctl start mysqld && systemctl enable mysqld && systemctl start httpd && systemctl enable httpd >> $LOGFILE
 
 checkerror $?
 
@@ -213,8 +213,8 @@ MYSQLTEMPPASSWORD="`grep 'temporary.*root@localhost' /var/log/mysqld.log | tail 
 systemctl stop mysqld.service 1>> $LOGFILE 
 rm -rf /var/lib/mysql/*logfile* 1>> $LOGFILE 
 systemctl start mysqld.service 1>> $LOGFILE 
-mysqladmin -u root --password="$MYSQLTEMPPASSWORD" password "$MYSQLROOTPASSWORD" 1>> $LOGFILE 
-mysql -u root -p"$MYSQLROOTPASSWORD" 1>> $LOGFILE <<-EOSQL
+mysqladmin -u root --password="$MYSQLTEMPPASSWORD" password "$MYSQLROOTPASSWORD" >> $LOGFILE 
+mysql -u root -p"${MYSQLROOTPASSWORD}" >> $LOGFILE <<-EOSQL
     DELETE FROM mysql.user WHERE User='';
     DROP DATABASE IF EXISTS test;
     DELETE FROM mysql.db WHERE Db='test' OR Db='test\\_%';
@@ -302,11 +302,11 @@ cd /var/www/vhosts/$WEBSITENAME/public_html 1>> $LOGFILE
 
 checkerror $?
 
-sudo -u $WEBSITEUSER wp core download >> $LOGFILE
-sudo -u $WEBSITEUSER wp config create --dbname=$WPDBNAME --dbuser=$WPUSER --dbpass=$WPPWD --skip-check >> $LOGFILE
-sudo -u $WEBSITEUSER wp core install --path="/var/www/vhosts/$WEBSITENAME/public_html/" --url="$WEBSITENAME" --title="Brand new $WEBSITENAME" --admin_user="$WPDASHBOARDUSER" --admin_password="$WPDASHBOARDPASS" --admin_email="$WPDASHBOARDEMAIL" >> $LOGFILE
+sudo -u $WEBSITEUSER wp core download 1>> $LOGFILE
+sudo -u $WEBSITEUSER wp config create --dbname=$WPDBNAME --dbuser=$WPUSER --dbpass=$WPPWD --skip-check 1>> $LOGFILE
+sudo -u $WEBSITEUSER wp core install --path="/var/www/vhosts/$WEBSITENAME/public_html/" --url="$WEBSITENAME" --title="Brand new $WEBSITENAME" --admin_user="$WPDASHBOARDUSER" --admin_password="$WPDASHBOARDPASS" --admin_email="$WPDASHBOARDEMAIL" 1>> $LOGFILE
 echo "define('FS_METHOD','direct');" >> /var/www/vhosts/$WEBSITENAME/public_html/wp-config.php
-apachectl restart
+apachectl restart 1>> $LOGFILE
 
 checkerror $?
 
